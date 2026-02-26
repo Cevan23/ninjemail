@@ -197,7 +197,7 @@ def create_driver(browser, captcha_extension=False, proxy=None, captcha_key={}):
             else:
                 options.add_argument(f'--load-extension={ext_path}')
 
-        driver = uc.Chrome(options=options, headless=True, use_subprocess=False) 
+        driver = uc.Chrome(options=options, headless=False, use_subprocess=False, version_main=145) 
 
         if captcha_key.get('name', None) == 'nopecha':
             driver.get(f"https://nopecha.com/setup#{captcha_key.get('key', None)}")

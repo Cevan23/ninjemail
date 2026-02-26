@@ -6,11 +6,16 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException,
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait, Select
+from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.keys import Keys
-from sms_services import get_sms_instance
 from utils import get_month_by_number
 
+# 1. CẤU HÌNH LOGGING (Thêm phần này để đảm bảo log in ra màn hình)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%H:%M:%S'
+)
 logger = logging.getLogger(__name__)
 
 # Centralized selector configuration
@@ -54,12 +59,14 @@ class AccountCreationError(Exception):
 
 def next_button(driver: WebDriver) -> None:
     """Click the next button with improved reliability"""
+    logger.info("--> Đang tìm và ấn nút Next...")
     for selector in NEXT_BUTTON_SELECTORS:
         try:
             current_page = driver.current_url
             wait_and_click(driver, selector, timeout=5)
             time.sleep(1)  # Brief pause for page transition
             if current_page != driver.current_url:
+                logger.info("    Đã chuyển trang thành công!")
                 return
         except (TimeoutException, NoSuchElementException):
             continue
@@ -70,6 +77,7 @@ def set_how_to_set_username(driver: WebDriver) -> None:
     try:
         how_to_set_username = WebDriverWait(driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.ID, 'selectionc22')))
         how_to_set_username.click()
+        logger.info("--> Đã chọn chế độ 'Tạo địa chỉ Gmail của riêng bạn'")
     except:
         pass
 
@@ -86,6 +94,7 @@ def handle_errors(driver: WebDriver) -> None:
 
 def fill_personal_info(driver: WebDriver, first_name: str, last_name: str) -> None:
     """Fill in personal information section"""
+    logger.info(f"--> Bắt đầu điền Họ Tên: {first_name} {last_name}")
     try:
         set_input_value(driver, SELECTORS["first_name"], first_name)
         set_input_value(driver, SELECTORS["last_name"], last_name)
@@ -96,6 +105,7 @@ def fill_personal_info(driver: WebDriver, first_name: str, last_name: str) -> No
 
 def fill_birthdate(driver: WebDriver, month, day, year) -> None:
     """Fill in birthdate information"""
+    logger.info(f"--> Bắt đầu điền Ngày sinh: {month}-{day}-{year} và Giới tính")
     try:
         # Set day and year
         type_into(driver, SELECTORS["day"], day)
@@ -124,52 +134,73 @@ def fill_birthdate(driver: WebDriver, month, day, year) -> None:
         logger.error("Failed to fill birthdate info")
         raise AccountCreationError("Birthdate section failed") from e
 
-def handle_phone_verification(driver: WebDriver, sms_key, sms_provider) -> dict:
-    """Handle phone number verification process"""
+def handle_phone_verification_manual(driver: WebDriver) -> None:
+    """Handle phone number verification manually via terminal input"""
     try:
-        phone_info = {}
-        if sms_key['name'] == 'getsmscode':
-            phone = sms_provider.get_phone(send_prefix=True)
-            phone_info.update({'phone': phone})
-        elif sms_key['name'] in ['smspool', '5sim']:
-            phone, order_id = sms_provider.get_phone(send_prefix=True)
-            phone_info.update({'phone': phone, 'order_id': order_id})
+        # In ra Terminal yêu cầu người dùng nhập số
+        print("\n" + "="*50)
+        phone = input("[THỦ CÔNG] Vui lòng nhập số điện thoại của bạn (VD: 0912345678): ")
+        logger.info(f"Đang gửi số điện thoại {phone} lên trình duyệt...")
+        print("="*50 + "\n")
         
         phone_input = WebDriverWait(driver, WAIT_TIMEOUT).until(
             EC.element_to_be_clickable(SELECTORS["phone_input"])
         )
-        phone_input.send_keys('+' + str(phone) + Keys.ENTER)
+        phone_input.clear()
+        phone_input.send_keys(str(phone) + Keys.ENTER)
         
         # Check for phone number rejection
         try:
-            error_element = WebDriverWait(driver, 10).until(
+            error_element = WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located(SELECTORS["phone_error"])
             )
             logger.error("Phone number rejected: %s", error_element.text)
             raise AccountCreationError(f"Phone rejected: {error_element.text}")
         except TimeoutException:
-            pass
-
-        return phone_info
+            logger.info("Số điện thoại hợp lệ, chờ nhập mã OTP...")
+            pass # Không có lỗi, tiếp tục
+            
     except Exception as e:
         logger.error("Phone verification failed: %s", str(e))
         raise AccountCreationError("Phone verification step failed") from e
 
-def handle_sms_code(driver: WebDriver, sms_key, sms_provider, phone_info: dict) -> None:
-    """Handle SMS code entry"""
+def handle_sms_code_manual(driver: WebDriver) -> None:
+    """Handle SMS code entry manually via terminal input"""
     try:
-        if sms_key['name'] == 'getsmscode':
-            code = sms_provider.get_code(phone_info['phone'])
-        elif sms_key['name'] in ['smspool', '5sim']:
-            code = sms_provider.get_code(phone_info['order_id'])
+        # In ra Terminal yêu cầu người dùng nhập OTP
+        print("\n" + "="*50)
+        code = input("[THỦ CÔNG] Vui lòng nhập mã OTP 6 số Google gửi về điện thoại: ")
+        logger.info("Đang điền mã OTP vào trình duyệt...")
+        print("="*50 + "\n")
+        
         code_input = WebDriverWait(driver, WAIT_TIMEOUT).until(
             EC.element_to_be_clickable(SELECTORS["verification_code"])
         )
+        code_input.clear()
         code_input.send_keys(str(code) + Keys.ENTER)
         time.sleep(2)  # Allow time for code verification
     except Exception as e:
         logger.error("SMS code entry failed: %s", str(e))
         raise AccountCreationError("SMS verification failed") from e
+
+def handle_qr_verification_manual(driver: WebDriver) -> bool:
+    """Check if Google shows the QR code verification page and pause for manual scanning"""
+    try:
+        # Check for the QR verification header or text quickly
+        qr_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Verify some info before creating an account') or contains(text(), 'Scan the QR code')]")
+        if qr_elements:
+            logger.info("!!! CẢNH BÁO: Google yêu cầu xác minh bằng MÃ QR !!!")
+            print("\n" + "="*50)
+            print("[THỦ CÔNG] Google đang yêu cầu quét mã QR xác thực.")
+            print("1. Hãy mở ứng dụng Camera/Google Lens trên điện thoại của bạn.")
+            print("2. Quét mã QR đang hiển thị trên trình duyệt laptop.")
+            print("3. Làm theo hướng dẫn trên điện thoại.")
+            input("4. SAU KHI XONG xác thực trên điện thoại và trình duyệt đã tự chuyển trang, hãy NHẤN ENTER TẠI ĐÂY để tool chạy tiếp... ")
+            print("="*50 + "\n")
+            return True
+        return False
+    except Exception as e:
+        return False
 
 def confirm_alert(driver: WebDriver) -> None:
     """Confirm the alert popup"""
@@ -178,11 +209,11 @@ def confirm_alert(driver: WebDriver) -> None:
         alert = driver.switch_to.alert
         alert.accept()
     except NoAlertPresentException:
-        logging.info("No alert present")
+        pass # Đoạn này không cần log nữa để tránh rác màn hình
 
 def create_account(
     driver,
-    sms_key,
+    sms_key, # Vẫn giữ tham số này để không làm hỏng hàm gọi từ bên ngoài
     username,
     password,
     first_name,
@@ -192,13 +223,11 @@ def create_account(
     year
 ) -> Tuple[Optional[str], Optional[str]]:
     """
-    Create a new Gmail account with improved reliability and error handling
-    
-    Returns:
-        Tuple: (email, password) or (None, None) on failure
+    Create a new Gmail account using manual phone verification
     """
     try:
-        logger.info('Starting Gmail account creation process')
+        logger.info('================ BẮT ĐẦU LUỒNG GOOGLE ================')
+        logger.info('--> Đang mở trang đăng ký Google...')
         driver.get('https://accounts.google.com/signup/v2/createaccount?flowName=GlifWebSignIn&flowEntry=SignUp')
         
         # Initial information
@@ -206,22 +235,34 @@ def create_account(
         fill_birthdate(driver, month, day, year)
         
         # Username and password
+        logger.info(f"--> Bắt đầu điền Username: {username}")
         set_how_to_set_username(driver)
         set_input_value(driver, SELECTORS["username"], username)
         next_button(driver)
+
+        logger.info("--> Bắt đầu điền Mật khẩu...")
         type_into(driver, SELECTORS["password"], password)
         type_into(driver, SELECTORS["password_confirm"], password)
         next_button(driver)
 
+        logger.info("--> Đang kiểm tra lỗi sau khi điền thông tin cơ bản...")
         handle_errors(driver)
         
         time.sleep(2)
-        if driver.find_elements(By.ID, "phoneNumberId"):
-            # Phone verification
-            sms_provider = get_sms_instance(sms_key, 'google')
-            phone_info = handle_phone_verification(driver, sms_key, sms_provider)
-            handle_sms_code(driver, sms_key, sms_provider, phone_info)
         
+        # Kiểm tra QR code xác minh thiết bị
+        if handle_qr_verification_manual(driver):
+            pass # Đã xử lý thủ công xong, trình duyệt sẽ tự nhảy trang
+        # Nếu không có QR, kiểm tra xem có bị bắt xác minh SĐT không
+        elif driver.find_elements(By.ID, "phoneNumberId"):
+            logger.info("!!! CẢNH BÁO: Google yêu cầu xác minh số điện thoại !!!")
+            # Gọi 2 hàm nhập tay
+            handle_phone_verification_manual(driver)
+            handle_sms_code_manual(driver)
+        else:
+            logger.info("--> May mắn! Google KHÔNG yêu cầu xác minh SĐT lúc này.")
+        
+        logger.info("--> Đang xử lý các trang cuối (Recovery Email, Terms...)")
         for _ in range(3):
             next_button(driver)
             time.sleep(2)
@@ -229,16 +270,24 @@ def create_account(
         confirm_alert(driver)
         
         # Agree to terms
-        agree_button = WebDriverWait(driver, 5).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "button span.VfPpkd-vQzf8d")))
-        agree_button.click()
+        try:
+            logger.info("--> Đang tìm nút 'I agree' (Đồng ý điều khoản)...")
+            agree_button = WebDriverWait(driver, 5).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "button span.VfPpkd-vQzf8d")))
+            agree_button.click()
+            logger.info("--> Đã click 'I agree'!")
+        except:
+            logger.info("--> Không tìm thấy nút 'I agree', có thể đã lướt qua.")
+            pass
 
         # Log successful creation
-        logger.info("Gmail account created successfully")
-        logger.debug("Account details: %s@gmail.com", username)
+        logger.info("================ TẠO TÀI KHOẢN THÀNH CÔNG ================")
+        logger.info(f"Tài khoản: {username}@gmail.com")
         return f"{username}@gmail.com", password
 
     except Exception as e:
-        logger.error("Account creation failed: %s", str(e))
+        logger.error("!!! LUỒNG TẠO TÀI KHOẢN THẤT BẠI !!!")
+        logger.error(f"Chi tiết lỗi: {str(e)}")
         raise AccountCreationError("Account creation process failed") from e
     finally:
+        logger.info("--> Đang đóng trình duyệt và dọn dẹp...")
         driver.quit()
